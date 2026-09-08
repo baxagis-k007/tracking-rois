@@ -1,40 +1,81 @@
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kings Tracker v9 — Générateur de rapport</title>
-<style>
-  :root{--bg:#14161a;--pan:#1e2228;--acc:#f5c542;--txt:#e8e8e8}
-  *{box-sizing:border-box}body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--txt);padding:20px}
-  h1{font-size:20px}.muted{color:#9aa3ad;font-size:13px}
-  .panel{background:var(--pan);border-radius:10px;padding:14px;margin-bottom:14px}
-  label{font-size:13px;margin-right:10px;display:inline-flex;align-items:center;gap:6px}
-  input[type=number]{width:64px;background:#121417;color:var(--txt);border:1px solid #333;border-radius:6px;padding:4px}
-  button{background:var(--acc);border:0;border-radius:8px;padding:9px 16px;font-weight:700;cursor:pointer}
-  button.sec{background:#2a2f37;color:var(--txt)}
-  canvas{width:100%;border-radius:8px;background:#000}
-  #prog{height:6px;background:#2a2f37;border-radius:3px;margin-top:10px;display:none}
-  #prog>div{height:100%;width:0;background:var(--acc);border-radius:3px}
-  pre{background:#0d0f12;border:1px solid #2a2f37;border-radius:8px;padding:12px;font-size:12px;white-space:pre-wrap}
-  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-  #gal img{border-radius:6px}
-</style>
-</head>
-<body>
-<h1>👑 Kings Tracker v9 — rapport de tracking</h1>
-<p class="muted">100 % local : aucune vidéo n'est envoyée. Copiez le rapport généré et collez‑le dans le chat.</p>
-
-<div class="panel">
-  <div class="row">
-    <input type="file" id="fileVideo" accept="video/*">
-    <label>fps <input type="number" id="fps" value="30"></label>
-    <button id="btnRun" disabled>▶ Analyser</button>
-  </div>
-  <div class="row" style="margin-top:10px">
-    <label>H° min <input id="h0" type="number" value="20"></label>
-    <label>H° max <input id="h1" type="number" value="75"></label>
-    <label>S min <input id="smin" type="number" step="0.05" value="0.55"></label>
+class Tracker{
+  constructor(fps){this.fps=fps;this.dt=1/fps;this.tracks=new Map();this.nid=0;this.frame=0;
+    this.mergeFrames=[];this.closeFrames=[];this.swaps=0;
+    this.fusionFrames=0;this.fusionLock=0;}
+  spawn(d,rank){this.tracks.set(this.nid++,{x:d.x,y:d.y,s:d.s,vx:0,vy:0,lost:0,rank:rank||0,
+    first:this.frame,last:this.frame,occ:[],bands:[0,0,0,0,0],vmax:0,vsum:0,vn:0,sMin:d.s,sMax:d.s});}
+  update(dets,merges){
+    this.frame++; if(merges)this.mergeFrames.push(this.frame);
+    const dt=this.dt;
+    for(const t of this.tracks.values()){t.px=t.x+t.vx*dt;t.py=t.y+t.vy*dt;}
+    if(!this.tracks.size)dets.forEach((d,i)=>this.spawn(d,i));
+    else{
+      const ids=[...this.tracks.keys()];
+      const cross=new Set();
+      for(let i=0;i<ids.length;i++)for(let j=i+1;j<ids.length;j++){
+        const a=this.tracks.get(ids[i]),b=this.tracks.get(ids[j]);
+        if(Math.abs(a.px-b.px)<80&&Math.abs(a.vx)>50&&Math.abs(b.vx)>50&&(a.vx>0)!==(b.vx>0)){
+          cross.add(a.rank+">"+b.rank); cross.add(b.rank+">"+a.rank);}
+      }
+      const pairs=[];
+      ids.forEach((id,a)=>dets.forEach((d,b)=>{
+        const t=this.tracks.get(id);
+        let c=Math.hypot(t.px-d.x,t.py-d.y)+1.0*Math.abs(t.s-d.s);
+        if(b!==t.rank&&!cross.has(t.rank+">"+b))c+=this.fusionLock>0?30:60; // ← PÉNALITÉ RÉDUITE
+        pairs.push([c,a,b]);}));
+      pairs.sort((p,q)=>p[0]-q[0]);
+      const uD=new Set(),matched=new Set();
+      for(const[c,a,b]of pairs){
+        const id=ids[a]; if(matched.has(id)||uD.has(b))continue;
+        const t=this.tracks.get(id),sp=Math.hypot(t.vx,t.vy);
+        const g0=t.lost>3?70:45;
+        if(c<Math.max(g0,1.3*sp*dt+8)){
+          uD.add(b);matched.add(id);
+          if(b!==t.rank&&cross.has(t.rank+">"+b))this.swaps++;
+          const d=dets[b],k=Math.max(1,this.frame-t.last);
+          t.vx=clamp(.35*t.vx+.65*(d.x-t.x)/(k*dt));
+          t.vy=clamp(.35*t.vy+.65*(d.y-t.y)/(k*dt));
+          t.x=d.x;t.y=d.y;t.s=d.s;t.rank=b;
+          t.sMin=Math.min(t.sMin,d.s);t.sMax=Math.max(t.sMax,d.s);
+          t.last=this.frame;t.lost=0;
+        }
+      }
+      dets.forEach((d,b)=>{
+        if(uD.has(b)||this.tracks.size>=NB_ROIS)return;
+        const far=[...this.tracks.values()].every(t=>Math.hypot(t.px-d.x,t.py-d.y)>60);
+        if(far)this.spawn(d,b);});
+      for(const id of ids){const t=this.tracks.get(id);
+        if(matched.has(id))t.lost=0;
+        else{t.lost++;t.occ.push(this.frame);if(t.lost>45)this.tracks.delete(id);}}
+    }
+    /* ---- CORRECTION v10 : plus de return pendant fusionLock ---- */
+    const totalArea=dets.reduce((sum,d)=>sum+d.n,0);
+    if(totalArea>2.8*A0)this.fusionFrames++;
+    else this.fusionFrames=0;
+    if(this.fusionFrames>3)this.fusionLock=8;
+    if(this.fusionLock>0)this.fusionLock--;
+    /* ---- v10 : prédiction continue même en fusionLock ---- */
+    for(const t of this.tracks.values()){
+      if(t.lost){
+        t.vx=t.vy=0;
+        const d=Math.hypot(t.px-t.x,t.py-t.y);
+        if(d>100){
+          t.x=t.px;t.y=t.py;
+          t.lost=0;
+        }
+      }
+    }
+    for(const t of this.tracks.values()){
+      if(t.lost)continue;
+      const sp=Math.hypot(t.vx,t.vy);
+      t.vmax=Math.max(t.vmax,sp);t.vsum+=sp;t.vn++;
+      t.bands[sp<100?0:sp<500?1:sp<700?2:sp<=1500?3:4]++;
+    }
+    const act=[...this.tracks.values()].filter(t=>!t.lost);
+    outer:for(let i=0;i<act.length;i++)for(let j=i+1;j<act.length;j++)
+      if(Math.hypot(act[i].x-act[j].x,act[i].y-act[j].y)<1.1*(act[i].s+act[j].s)){this.closeFrames.push(this.frame);break outer;}
+  }
+}    <label>S min <input id="smin" type="number" step="0.05" value="0.55"></label>
     <label>V min <input id="vmin" type="number" step="0.05" value="0.55"></label>
     <label>aire min <input id="amin" type="number" value="120"></label>
   </div>
