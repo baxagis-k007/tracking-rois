@@ -238,7 +238,7 @@ class Tracker{
       ids.forEach((id,a)=>dets.forEach((d,b)=>{
         const t=this.tracks.get(id);
         let c=Math.hypot(t.px-d.x,t.py-d.y)+1.0*Math.abs(t.s-d.s);
-        if(b!==t.rank&&!cross.has(t.rank+">"+b))c+=this.fusionLock>0?30:60; // ← PÉNALITÉ RÉDUITE
+        if(b!==t.rank&&!cross.has(t.rank+">"+b))   c+=this.fusionLock>0?0:60;; // ← PÉNALITÉ RÉDUITE
         pairs.push([c,a,b]);}));
       pairs.sort((p,q)=>p[0]-q[0]);
       const uD=new Set(),matched=new Set();
