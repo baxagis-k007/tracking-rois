@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kings Tracker v10 — Générateur de rapport</title>
+<title>Kings Tracker v12 — Générateur de rapport</title>
 <style>
   :root{--bg:#14161a;--pan:#1e2228;--acc:#f5c542;--txt:#e8e8e8}
   *{box-sizing:border-box}body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--txt);padding:20px}
@@ -19,11 +19,26 @@
   pre{background:#0d0f12;border:1px solid #2a2f37;border-radius:8px;padding:12px;font-size:12px;white-space:pre-wrap}
   .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
   #gal img{border-radius:6px}
+  .sel{background:#2a2f37;color:var(--txt);border:3px solid transparent;border-radius:12px;padding:10px 14px;font-size:16px;font-weight:700}
+  .sel.on{border-color:var(--c)}
+  .sel:not(.on){opacity:.35}
+  #legend span{background:#121417}
 </style>
 </head>
 <body>
-<h1>👑 Kings Tracker v10 — rapport de tracking</h1>
+<h1>👑 Kings Tracker v12 — rapport de tracking</h1>
 <p class="muted">100 % local : aucune vidéo n'est envoyée. Copiez le rapport généré et collez‑le dans le chat.</p>
+
+<div class="panel">
+  <b>👑 Rois à suivre</b>
+  <div class="row" style="margin-top:8px">
+    <button id="sel0" class="sel on" style="--c:#ff5722">🦊 Gauche</button>
+    <button id="sel1" class="sel on" style="--c:#4caf50">🐸 Milieu</button>
+    <button id="sel2" class="sel on" style="--c:#2196f3">🐙 Droite</button>
+  </div>
+  <label style="margin-top:10px"><input type="checkbox" id="child" checked> Mode enfant (gros marqueurs colorés)</label>
+  <div id="legend" class="row" style="margin-top:10px"></div>
+</div>
 
 <div class="panel">
   <div class="row">
@@ -35,6 +50,370 @@
     <label>H° min <input id="h0" type="number" value="20"></label>
     <label>H° max <input id="h1" type="number" value="75"></label>
     <label>S min <input id="smin" type="number" step="0.05" value="0.55"></label>
+    <label>V min <input id="vmin" type="number" step="0.05" value="0.55"></label>
+    <label>aire min <input id="amin" type="number" value="120"></label>
+  </div>
+  <div id="prog"><div></div></div>
+</div>
+
+<div class="panel"><canvas id="view"></canvas><p class="muted">Vue tracking (mode enfant = anneaux colorés + emojis)</p><canvas id="mask"></canvas><p class="muted">Masque couronnes (debug)</p></div>
+
+<div class="panel" id="galWrap" style="display:none"><b>Frames problématiques (vue | masque)</b><div id="gal" class="row"></div></div>
+
+<div class="panel">
+  <div class="row"><b>Comparateur de similitude (2 crops)</b>
+    <input type="file" id="simA" accept="image/*"><input type="file" id="simB" accept="image/*">
+    <button class="sec" id="btnSim">Comparer</button>
+  </div>
+  <div id="simOut" class="muted"></div>
+</div>
+
+<div class="panel">
+  <div class="row"><b>Rapport</b><button id="btnCopy">📋 Copier le rapport</button></div>
+  <pre id="pre">— Lancez une analyse pour générer le rapport —</pre>
+</div>
+
+<script>
+"use strict";
+const $=s=>document.querySelector(s), clamp=v=>Math.max(-3000,Math.min(3000,v));
+const NB_ROIS=3;
+const COLORS=["#ff5722","#4caf50","#2196f3"], EMO=["🦊","🐸","🐙"], NAMES=["gauche","milieu","droite"];
+let SEL=new Set([0,1,2]);
+function updSel(){
+  for(let r=0;r<3;r++)$("#sel"+r).classList.toggle("on",SEL.has(r));
+  $("#legend").innerHTML=[...SEL].sort().map(r=>
+    '<span style="border:3px solid '+COLORS[r]+';border-radius:10px;padding:6px 10px;font-size:16px">'+EMO[r]+' Roi '+NAMES[r]+'</span>').join("");
+}
+for(let r=0;r<3;r++)$("#sel"+r).onclick=()=>{
+  if(SEL.has(r)){if(SEL.size>1)SEL.delete(r);}else SEL.add(r);
+  updSel();};
+updSel();
+
+const vid=document.createElement("video"); vid.muted=true;
+const can=$("#view"), ctx=can.getContext("2d",{willReadFrequently:true});
+const mcan=$("#mask"), mctx=mcan.getContext("2d");
+let meta=null, R=null, simLast=null, running=false, A0=1200;
+
+$("#fileVideo").onchange=e=>{
+  const f=e.target.files[0]; if(!f)return;
+  vid.src=URL.createObjectURL(f);
+  vid.onloadeddata=()=>{ meta={name:f.name,w:vid.videoWidth,h:vid.videoHeight,dur:vid.duration};
+    can.width=320; can.height=Math.round(320*meta.h/meta.w);
+    mcan.width=320; mcan.height=can.height;
+    ctx.font="12px monospace"; ctx.drawImage(vid,0,0,can.width,can.height);
+    $("#btnRun").disabled=false; };
+};
+function seek(t){return new Promise(res=>{
+  if(Math.abs(vid.currentTime-t)<1e-4)return res();
+  const h=()=>{vid.removeEventListener("seeked",h);res();};
+  vid.addEventListener("seeked",h); vid.currentTime=t;});}
+
+function dilate(m,w,h){const o=new Uint8Array(w*h);
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){let v=0;
+    for(let dy=-1;dy<=1&&!v;dy++)for(let dx=-1;dx<=1;dx++){
+      const yy=y+dy,xx=x+dx;if(yy<0||xx<0||yy>=h||xx>=w)continue;
+      if(m[yy*w+xx]){v=1;break;}}
+    o[y*w+x]=v;}
+  return o;}
+function erode(m,w,h){const o=new Uint8Array(w*h);
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){let v=1;
+    for(let dy=-1;dy<=1&&v;dy++)for(let dx=-1;dx<=1;dx++){
+      const yy=y+dy,xx=x+dx;if(yy<0||xx<0||yy>=h||xx>=w)continue;
+      if(!m[yy*w+xx]){v=0;break;}}
+    o[y*w+x]=v;}
+  return o;}
+function drawMask(mask,w,h){
+  const id=mctx.createImageData(w,h);
+  for(let i=0;i<w*h;i++){const v=mask[i]?255:0;
+    id.data[i*4]=v;id.data[i*4+1]=v;id.data[i*4+2]=v;id.data[i*4+3]=255;}
+  mctx.putImageData(id,0,0);}
+
+function label(mask,w,h){
+  const lab=new Int32Array(w*h),parent=[0];let next=1;
+  const find=x=>{while(parent[x]!==x){parent[x]=parent[parent[x]];x=parent[x];}return x;};
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    const i=y*w+x;if(!mask[i])continue;
+    const l=x>0?lab[i-1]:0,u=y>0?lab[i-w]:0;
+    if(l&&u){const fl=find(l),fu=find(u);lab[i]=Math.min(fl,fu);if(fl!==fu)parent[Math.max(fl,fu)]=Math.min(fl,fu);}
+    else if(l||u)lab[i]=l||u;
+    else{parent[next]=next;lab[i]=next;next++;}}
+  const agg=new Map();
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    const li=lab[y*w+x];if(!li)continue;const rt=find(li);
+    const a=agg.get(rt)||{n:0,x0:x,x1:x,y0:y,y1:y};
+    a.n++;a.x0=Math.min(a.x0,x);a.x1=Math.max(a.x1,x);a.y0=Math.min(a.y0,y);a.y1=Math.max(a.y1,y);agg.set(rt,a);}
+  return agg;}
+
+function mergeBoxes(boxes,g){
+  let changed=true;
+  while(changed){changed=false;
+    outer:for(let i=0;i<boxes.length;i++)for(let j=i+1;j<boxes.length;j++){
+      const a=boxes[i],b=boxes[j];
+      const dx=Math.max(a.x0,b.x0)-Math.min(a.x1,b.x1);
+      const dy=Math.max(a.y0,b.y0)-Math.min(a.y1,b.y1);
+      if(dx<=g&&dy<=g){
+        a.x0=Math.min(a.x0,b.x0);a.y0=Math.min(a.y0,b.y0);
+        a.x1=Math.max(a.x1,b.x1);a.y1=Math.max(a.y1,b.y1);a.n+=b.n;
+        boxes.splice(j,1);changed=true;break outer;}}}
+  return boxes;}
+
+function crownDims(){const ch=Math.sqrt(A0/0.9);return{ch,cw:1.35*ch};}
+
+function peaksInBox(mask,w,h,b,kmax){
+  const n=b.x1-b.x0+1, top=new Array(n).fill(1e9);
+  for(let x=b.x0;x<=b.x1;x++)
+    for(let y=b.y0;y<=b.y1;y++)
+      if(mask[y*w+x]){top[x-b.x0]=y;break;}
+  const sm=top.map((_,i)=>{let s=0,c=0;
+    for(let d=-2;d<=2;d++){const j=i+d;if(j>=0&&j<n&&top[j]<1e9){s+=top[j];c++;}}
+    return c?s/c:1e9;});
+  const W=18;
+  const prom=sm.map((v,i)=>{
+    if(v>1e8)return -1;
+    let l=v,r=v;
+    for(let j=i;j>=Math.max(0,i-W);j--)l=Math.max(l,sm[j]);
+    for(let j=i;j<=Math.min(n-1,i+W);j++)r=Math.max(r,sm[j]);
+    return Math.min(l,r)-v;});
+  const cand=[];
+  for(let i=0;i<n;i++)if(prom[i]>=5)cand.push(i);
+  cand.sort((a,b)=>prom[b]-prom[a]);
+  const picked=[];
+  for(const i of cand){
+    if(picked.length>=kmax)break;
+    if(picked.every(p=>Math.abs(p-i)>=12))picked.push(i);}
+  if(!picked.length){let bi=0,bv=1e9;
+    for(let i=0;i<n;i++)if(sm[i]<bv){bv=sm[i];bi=i;}
+    picked.push(bi);}
+  picked.sort((a,b)=>a-b);
+  return picked.map(i=>({x:b.x0+i,y:sm[i]}));
+}
+
+function detect(S,K){
+  const img=ctx.getImageData(0,0,can.width,can.height),d=img.data,w=can.width,h=can.height;
+  let mask=new Uint8Array(w*h);
+  for(let i=0;i<w*h;i++){
+    const r=d[i*4]/255,g=d[i*4+1]/255,b=d[i*4+2]/255;
+    const mx=Math.max(r,g,b),mn=Math.min(r,g,b),df=mx-mn;let hh=0;
+    if(df>0){if(mx===r)hh=((g-b)/df)%6;else if(mx===g)hh=(b-r)/df+2;else hh=(r-g)/df+4;hh*=60;if(hh<0)hh+=360;}
+    if(hh>=S.h0&&hh<=S.h1&&(mx>0?df/mx:0)>=S.smin&&mx>=S.vmin)mask[i]=1;
+  }
+  mask=erode(dilate(mask,w,h),w,h);
+  mask=erode(dilate(mask,w,h),w,h);
+  drawMask(mask,w,h);
+  let boxes=[];
+  for(const c of label(mask,w,h).values())
+    if(c.n>=S.amin)boxes.push({x0:c.x0,y0:c.y0,x1:c.x1,y1:c.y1,n:c.n});
+  boxes=mergeBoxes(boxes,10);
+  for(const b of boxes){
+    const r=(b.x1-b.x0+1)/(b.y1-b.y0+1);
+    if(r>1.05&&r<1.75&&b.n>0.75*A0&&b.n<1.3*A0)
+      A0=Math.min(2500,Math.max(600,0.95*A0+0.05*b.n));
+  }
+  const{ch,cw}=crownDims();
+  const dets=[];let merges=0;
+  for(const b of boxes){
+    const bw=b.x1-b.x0+1,bh=b.y1-b.y0+1;
+    let kArea=Math.min(3,Math.max(1,Math.round(b.n/A0)));
+    if(b.n>1.35*A0&&kArea<2)kArea=2;
+    if(b.n>2.4*A0&&kArea<3)kArea=3;
+    const pk=peaksInBox(mask,w,h,b,3);
+    const k=Math.min(3,Math.max(kArea,pk.length));
+    if(k===1){dets.push({x:(b.x0+bw/2)*K,y:(b.y0+bh/2)*K,s:bh*K,n:b.n});continue;}
+    merges++;
+    for(let q=0;q<k;q++){
+      if(q<pk.length)dets.push({x:pk[q].x*K,y:(pk[q].y+0.55*ch)*K,s:ch*K,n:b.n/k});
+      else dets.push({x:(b.x0+bw*(q+.5)/k)*K,y:(b.y0+bh/2)*K,s:bh*K,n:b.n/k});
+    }
+  }
+  dets.sort((a,b)=>b.n-a.n);
+  return{dets:dets.slice(0,NB_ROIS).sort((a,b)=>a.x-b.x),merges};
+}
+
+/* ---- tracker v12 : sélection des rangs + mode enfant ---- */
+class Tracker{
+  constructor(fps){this.fps=fps;this.dt=1/fps;this.tracks=new Map();this.nid=0;this.frame=0;
+    this.mergeFrames=[];this.closeFrames=[];this.swaps=0;
+    this.fusionFrames=0;this.fusionLock=0;}
+  spawn(d,rank){this.tracks.set(this.nid++,{x:d.x,y:d.y,s:d.s,vx:0,vy:0,lost:0,rank:rank,
+    first:this.frame,last:this.frame,occ:[],bands:[0,0,0,0,0],vmax:0,vsum:0,vn:0,sMin:d.s,sMax:d.s});}
+  update(dets,merges){
+    this.frame++; if(merges)this.mergeFrames.push(this.frame);
+    const dt=this.dt;
+    for(const t of this.tracks.values()){t.px=t.x+t.vx*dt;t.py=t.y+t.vy*dt;}
+    if(!this.tracks.size)dets.forEach((d,i)=>{if(SEL.has(i))this.spawn(d,i);});
+    else{
+      const ids=[...this.tracks.keys()];
+      const cross=new Set();
+      for(let i=0;i<ids.length;i++)for(let j=i+1;j<ids.length;j++){
+        const a=this.tracks.get(ids[i]),b=this.tracks.get(ids[j]);
+        if(Math.abs(a.px-b.px)<80&&Math.abs(a.vx)>50&&Math.abs(b.vx)>50&&(a.vx>0)!==(b.vx>0)){
+          cross.add(a.rank+">"+b.rank); cross.add(b.rank+">"+a.rank);}
+      }
+      const pairs=[];
+      ids.forEach((id,a)=>dets.forEach((d,b)=>{
+        if(!SEL.has(b))return;
+        const t=this.tracks.get(id);
+        let c=Math.hypot(t.px-d.x,t.py-d.y)+1.0*Math.abs(t.s-d.s);
+        if(b!==t.rank&&!cross.has(t.rank+">"+b))c+=this.fusionLock>0?0:60;
+        pairs.push([c,a,b]);}));
+      pairs.sort((p,q)=>p[0]-q[0]);
+      const uD=new Set(),matched=new Set();
+      for(const[c,a,b]of pairs){
+        const id=ids[a]; if(matched.has(id)||uD.has(b))continue;
+        const t=this.tracks.get(id),sp=Math.hypot(t.vx,t.vy);
+        const g0=t.lost>3?70:45;
+        if(c<Math.max(g0,1.3*sp*dt+8)){
+          uD.add(b);matched.add(id);
+          if(b!==t.rank&&cross.has(t.rank+">"+b))this.swaps++;
+          const d=dets[b],k=Math.max(1,this.frame-t.last);
+          t.vx=clamp(.35*t.vx+.65*(d.x-t.x)/(k*dt));
+          t.vy=clamp(.35*t.vy+.65*(d.y-t.y)/(k*dt));
+          t.x=d.x;t.y=d.y;t.s=d.s;t.rank=b;
+          t.sMin=Math.min(t.sMin,d.s);t.sMax=Math.max(t.sMax,d.s);
+          t.last=this.frame;t.lost=0;
+        }
+      }
+      dets.forEach((d,b)=>{
+        if(uD.has(b)||!SEL.has(b)||this.tracks.size>=SEL.size)return;
+        const far=[...this.tracks.values()].every(t=>Math.hypot(t.px-d.x,t.py-d.y)>60);
+        if(far)this.spawn(d,b);});
+      for(const id of ids){const t=this.tracks.get(id);
+        if(matched.has(id))t.lost=0;
+        else{t.lost++;t.occ.push(this.frame);if(t.lost>45)this.tracks.delete(id);}}
+    }
+    const totalArea=dets.reduce((sum,d)=>sum+d.n,0);
+    if(totalArea>2.8*A0)this.fusionFrames++;
+    else this.fusionFrames=0;
+    if(this.fusionFrames>3)this.fusionLock=8;
+    if(this.fusionLock>0)this.fusionLock--;
+    for(const t of this.tracks.values()){
+      if(t.lost){
+        t.vx=t.vy=0;
+        const d=Math.hypot(t.px-t.x,t.py-t.y);
+        if(d>100){t.x=t.px;t.y=t.py;t.lost=0;}
+      }
+    }
+    for(const t of this.tracks.values()){
+      if(t.lost)continue;
+      const sp=Math.hypot(t.vx,t.vy);
+      t.vmax=Math.max(t.vmax,sp);t.vsum+=sp;t.vn++;
+      t.bands[sp<100?0:sp<500?1:sp<700?2:sp<=1500?3:4]++;
+    }
+    const act=[...this.tracks.values()].filter(t=>!t.lost);
+    outer:for(let i=0;i<act.length;i++)for(let j=i+1;j<act.length;j++)
+      if(Math.hypot(act[i].x-act[j].x,act[i].y-act[j].y)<1.1*(act[i].s+act[j].s)){this.closeFrames.push(this.frame);break outer;}
+  }
+}
+const ranges=fr=>{const o=[];let s=null,p=null;
+  for(const f of fr){if(s===null){s=p=f;}else if(f===p+1)p=f;else{o.push(s===p?""+s:s+"-"+p);s=p=f;}}
+  if(s!==null)o.push(s===p?""+s:s+"-"+p);return o.join(", ");};
+
+$("#btnRun").onclick=async()=>{
+  if(running)return; running=true; $("#btnRun").disabled=true; $("#prog").style.display="block";
+  A0=1200;
+  const fps=+$("#fps").value||30;
+  const S={h0:+$("#h0").value,h1:+$("#h1").value,smin:+$("#smin").value,vmin:+$("#vmin").value,amin:+$("#amin").value};
+  const K=meta.w/can.width;
+  R={fps,K,S,frames:0,counts:{},bad:[],tr:new Tracker(fps),sel:[...SEL].sort()};
+  vid.pause();
+  const total=Math.floor(meta.dur*fps);
+  for(let i=0;i<=total;i++){
+    await seek(Math.min(i/fps,meta.dur-.001));
+    ctx.drawImage(vid,0,0,can.width,can.height);
+    const{dets,merges}=detect(S,K);
+    R.counts[dets.length]=(R.counts[dets.length]||0)+1;
+    R.tr.update(dets,merges); R.frames++;
+    if(dets.length!==NB_ROIS&&R.bad.length<6)R.bad.push({f:i,v:can.toDataURL(),m:mcan.toDataURL()});
+    if($("#child").checked){
+      /* ---- MODE ENFANT : gros anneaux colorés + emojis ---- */
+      for(const[id,t]of R.tr.tracks){
+        if(t.lost)continue;
+        const r=t.rank;
+        const cx=t.x/K, cy=t.y/K+1.7*t.s/K;
+        const rad=1.9*t.s/K*(1+0.06*Math.sin(R.tr.frame*0.35));
+        ctx.strokeStyle=COLORS[r]; ctx.lineWidth=5;
+        ctx.beginPath(); ctx.arc(cx,cy,rad,0,7); ctx.stroke();
+        ctx.font=Math.round(0.9*t.s/K)+"px serif";
+        ctx.fillText(EMO[r], cx-rad/2, t.y/K-0.7*t.s/K);
+        ctx.font="12px monospace";
+      }
+    }else{
+      for(const[id,t]of R.tr.tracks){
+        ctx.fillStyle=t.lost?"#f66":"#4f8";
+        ctx.beginPath();ctx.arc(t.x/K,t.y/K,4,0,7);ctx.fill();
+        ctx.fillText("#"+id+"r"+t.rank,t.x/K+6,t.y/K-6);
+      }
+      ctx.strokeStyle="#ff0";ctx.lineWidth=1.5;
+      for(const d of dets){
+        ctx.beginPath();
+        ctx.moveTo(d.x/K-4,d.y/K-4);ctx.lineTo(d.x/K+4,d.y/K+4);
+        ctx.moveTo(d.x/K+4,d.y/K-4);ctx.lineTo(d.x/K-4,d.y/K+4);
+        ctx.stroke();
+      }
+    }
+    $("#prog>div").style.width=(100*i/total)+"%";
+    if(i%10===0)await new Promise(r=>setTimeout(r,0));
+  }
+  const gal=$("#gal"); gal.innerHTML="";
+  for(const b of R.bad){
+    const div=document.createElement("div");
+    div.innerHTML='<p class="muted">frame '+b.f+'</p><img src="'+b.v+'" style="width:48%"><img src="'+b.m+'" style="width:48%">';
+    gal.appendChild(div);}
+  $("#galWrap").style.display=R.bad.length?"block":"none";
+  buildReport(); running=false; $("#btnRun").disabled=false;
+};
+
+function buildReport(){
+  const t=R.tr, vm=Math.max(0,...[...t.tracks.values()].map(x=>x.vmax));
+  const L=["=== RAPPORT TRACKING v12 ===","Généré le "+new Date().toLocaleString(),
+   "Fichier: "+meta.name+" | "+meta.w+"x"+meta.h+" | durée "+meta.dur.toFixed(2)+" s",
+   "fps analysé: "+R.fps+" | frames: "+R.frames,
+   "rois suivis: "+R.sel.map(r=>NAMES[r]).join(", "),
+   "Params: H "+R.S.h0+"-"+R.S.h1+"°, S>="+R.S.smin+", V>="+R.S.vmin+", aireMin="+R.S.amin,
+   "A0 (aire couronne apprise): "+Math.round(A0),
+   "détections gardées par frame: "+Object.entries(R.counts).map(([k,v])=>k+"→"+v).join(" "),
+   "échanges de rang (vrais swaps) détectés: "+t.swaps,
+   "frames problématiques capturées: "+(R.bad.map(b=>b.f).join(", ")||"aucune"),"",
+   "--- PISTES ("+t.nid+") ---"];
+  for(const[id,x]of t.tracks){
+    const pc=x.bands.map(b=>Math.round(100*b/Math.max(1,x.vn)));
+    L.push("#"+id+" rang "+x.rank+" ("+NAMES[x.rank]+"): vie "+(x.last-x.first+1)+" f (f"+x.first+"-f"+x.last+") | v_moy "+Math.round(x.vsum/Math.max(1,x.vn))
+      +" px/s | v_max "+Math.round(x.vmax)+" px/s | régimes <100:"+pc[0]+"% 100-500:"+pc[1]+"% 500-700:"+pc[2]
+      +"% 700-1500:"+pc[3]+"% >1500:"+pc[4]+"% | couronne h "+Math.round(x.sMin)+"-"+Math.round(x.sMax)+" px");
+  }
+  L.push("","--- ÉVÉNEMENTS ---",
+   "fusions/splits: "+t.mergeFrames.length+" f → "+(ranges(t.mergeFrames)||"-"),
+   "proximités/risque de swap: "+(ranges(t.closeFrames)||"-"),
+   "occlusions: "+[...t.tracks].map(([id,x])=>"#"+id+": "+(ranges(x.occ)||"ok")).join(" | "),
+   "","--- RÉGLAGES SUGGÉRÉS ---",
+   "v_max mesurée "+Math.round(vm)+" px/s → gate max ≈ "+Math.round(1.3*Math.max(100,vm)/R.fps+8)+" px à "+R.fps+" fps");
+  if(simLast)L.push("","--- SIMILITUDE (crops) ---","hist "+simLast.hist+"% | pixels "+simLast.pix+"% → "+simLast.verdict);
+  $("#pre").textContent=L.join("\n");
+}
+
+const loadImg=f=>new Promise(res=>{const im=new Image();im.onload=()=>res(im);im.src=URL.createObjectURL(f);});
+$("#btnSim").onclick=async()=>{
+  const a=$("#simA").files[0],b=$("#simB").files[0]; if(!a||!b)return;
+  const ia=await loadImg(a),ib=await loadImg(b);
+  const c=document.createElement("canvas");c.width=c.height=64;
+  const x=c.getContext("2d",{willReadFrequently:true});
+  const g=im=>{x.clearRect(0,0,64,64);const k=Math.max(64/im.width,64/im.height),w=im.width*k,h=im.height*k;
+    x.drawImage(im,(64-w)/2,(64-h)/2,w,h);return x.getImageData(0,0,64,64).data;};
+  const A=g(ia),B=g(ib),h1=new Array(24).fill(0),h2=new Array(24).fill(0); let mad=0;
+  for(let i=0;i<4096;i++){
+    for(let ch2=0;ch2<3;ch2++){h1[ch2*8+Math.min(7,A[i*4+ch2]>>5)]++;h2[ch2*8+Math.min(7,B[i*4+ch2]>>5)]++;}
+    mad+=Math.abs((A[i*4]+A[i*4+1]+A[i*4+2])-(B[i*4]+B[i*4+1]+B[i*4+2]))/3;
+  }
+  mad/=4096; let inter=0; for(let i=0;i<24;i++)inter+=Math.min(h1[i],h2[i]);
+  simLast={hist:Math.round(100*inter/4096),pix:Math.round(100*(1-mad/255))};
+  simLast.verdict=simLast.hist>90&&simLast.pix>90?"clones quasi identiques":simLast.hist>75?"très similaires":"différents";
+  $("#simOut").textContent="Similarité: hist "+simLast.hist+"% | pixels "+simLast.pix+"% → "+simLast.verdict;
+};
+$("#btnCopy").onclick=()=>navigator.clipboard.writeText($("#pre").textContent).then(()=>{
+  $("#btnCopy").textContent="✅ Copié !"; setTimeout(()=>$("#btnCopy").textContent="📋 Copier le rapport",1500);});
+</script>
+</body>
+</html>    <label>S min <input id="smin" type="number" step="0.05" value="0.55"></label>
     <label>V min <input id="vmin" type="number" step="0.05" value="0.55"></label>
     <label>aire min <input id="amin" type="number" value="120"></label>
   </div>
