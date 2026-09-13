@@ -1,7 +1,7 @@
 "use strict";
 let $=s=>document.querySelector(s), clamp=v=>Math.max(-3000,Math.min(3000,v));
 let NB_ROIS=3;
-let COLORS=["#ff5722","#4caf50","#2196f3"], EMO=["🦊","🐸","🐙"], LETTERS=["A","B","C"], NAMES=["gauche","milieu","droite"];
+let COLORS=["#ff5722","#4caf50","#2196f3"], EMO=["🦊","🐸",""], LETTERS=["A","B","C"], NAMES=["gauche","milieu","droite"];
 let SEL=new Set([0,1,2]), SEL_USED=new Set([0,1,2]);
 let ERRS=[]; let R_AUTO=null;
 window.addEventListener("error",e=>ERRS.push(e.message+" @ligne "+e.lineno));
@@ -160,3 +160,5 @@ function detectApple(img,K){
   let bw=bestC.x1-bestC.x0+1,bh=bestC.y1-bestC.y0+1;
   return{x:(bestC.x0+bw/2)*K,y:(bestC.y0+bh/2)*K,s:bh*K};
 }
+let bk1=$("#jsok");
+if(bk1){bk1.textContent="🟠 core.js OK — ui1.js manquant/tronqué";bk1.style.color="#ffd54f";}
