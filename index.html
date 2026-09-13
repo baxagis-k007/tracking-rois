@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kings Tracker v13.1 — Générateur de rapport</title>
+<title>Kings Tracker v14 — Générateur de rapport</title>
 <style>
   :root{--bg:#14161a;--pan:#1e2228;--acc:#f5c542;--txt:#e8e8e8}
   *{box-sizing:border-box}body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--txt);padding:20px}
@@ -13,6 +13,7 @@
   input[type=number]{width:64px;background:#121417;color:var(--txt);border:1px solid #333;border-radius:6px;padding:4px}
   button{background:var(--acc);border:0;border-radius:8px;padding:9px 16px;font-weight:700;cursor:pointer}
   button.sec{background:#2a2f37;color:var(--txt)}
+  button.auto{background:#7e57c2}
   canvas{width:100%;border-radius:8px;background:#000}
   #prog{height:6px;background:#2a2f37;border-radius:3px;margin-top:10px;display:none}
   #prog>div{height:100%;width:0;background:var(--acc);border-radius:3px}
@@ -26,8 +27,8 @@
 </style>
 </head>
 <body>
-<h1>👑 Kings Tracker v13.1 — rapport de tracking</h1>
-<p class="muted">100 % local : aucune vidéo n'est envoyée. Copiez le rapport généré et collez‑le dans le chat.</p>
+<h1>👑 Kings Tracker v14 — rapport de tracking</h1>
+<p class="muted">100 % local : aucune vidéo n'est envoyée. 🤖 = réglage autonome, puis analyse, puis arrêt.</p>
 
 <div class="panel">
   <b>👑 Rois à suivre</b>
@@ -45,7 +46,9 @@
     <input type="file" id="fileVideo" accept="video/*">
     <label>fps <input type="number" id="fps" value="30"></label>
     <button id="btnRun" disabled>▶ Analyser</button>
+    <button id="btnAuto" class="auto" disabled>🤖 Réglage auto</button>
   </div>
+  <div id="autoStatus" class="muted" style="margin-top:6px"></div>
   <div class="row" style="margin-top:10px">
     <label>H° min <input id="h0" type="number" value="20"></label>
     <label>H° max <input id="h1" type="number" value="75"></label>
@@ -56,7 +59,7 @@
   <div id="prog"><div></div></div>
 </div>
 
-<div class="panel"><canvas id="view"></canvas><p class="muted">Vue tracking (anneau plein = vu, pointillé = caché/prédit)</p><canvas id="mask"></canvas><p class="muted">Masque couronnes (debug)</p></div>
+<div class="panel"><canvas id="view"></canvas><p class="muted">Vue tracking (anneau plein = vu, pointillé = caché/prédit, rose = pomme)</p><canvas id="mask"></canvas><p class="muted">Masque couronnes (debug)</p></div>
 
 <div class="panel" id="galWrap" style="display:none"><b>Frames problématiques (vue | masque)</b><div id="gal" class="row"></div></div>
 
@@ -70,16 +73,16 @@
 
 <div class="panel">
   <div class="row"><b>Rapport</b><button id="btnCopy">📋 Copier le rapport</button></div>
-  <pre id="pre">— Lancez une analyse pour générer le rapport —</pre>
+  <pre id="pre">— Lancez une analyse (ou 🤖 Réglage auto) pour générer le rapport —</pre>
 </div>
 
 <script>
 "use strict";
 const $=s=>document.querySelector(s), clamp=v=>Math.max(-3000,Math.min(3000,v));
 const NB_ROIS=3;
-const COLORS=["#ff5722","#4caf50","#2196f3"], EMO=["🦊","","🐙"], NAMES=["gauche","milieu","droite"];
+const COLORS=["#ff5722","#4caf50","#2196f3"], EMO=["🦊","🐸",""], NAMES=["gauche","milieu","droite"];
 let SEL=new Set([0,1,2]);
-const ERRS=[];
+const ERRS=[]; let R_AUTO=null;
 window.addEventListener("error",e=>ERRS.push(e.message+" @ligne "+e.lineno));
 function updSel(){
   for(let r=0;r<3;r++)$("#sel"+r).classList.toggle("on",SEL.has(r));
@@ -103,9 +106,8 @@ $("#fileVideo").onchange=e=>{
     can.width=320; can.height=Math.round(320*meta.h/meta.w);
     mcan.width=320; mcan.height=can.height;
     ctx.font="12px monospace"; ctx.drawImage(vid,0,0,can.width,can.height);
-    $("#btnRun").disabled=false; };
+    $("#btnRun").disabled=false; $("#btnAuto").disabled=false; };
 };
-/* ---- v13.1 : seek avec timeout anti-blocage ---- */
 function seek(t){return new Promise(res=>{
   if(Math.abs(vid.currentTime-t)<1e-4)return res();
   let done=false;
@@ -195,8 +197,9 @@ function peaksInBox(mask,w,h,b,kmax){
   return picked.map(i=>({x:b.x0+i,y:sm[i]}));
 }
 
-function detect(S,K){
-  const img=ctx.getImageData(0,0,can.width,can.height),d=img.data,w=can.width,h=can.height;
+/* ---- détection couronnes (pure : prend une ImageData) ---- */
+function detectFrom(img,S,K,withMask){
+  const d=img.data,w=img.width,h=img.height;
   let mask=new Uint8Array(w*h);
   for(let i=0;i<w*h;i++){
     const r=d[i*4]/255,g=d[i*4+1]/255,b=d[i*4+2]/255;
@@ -206,7 +209,7 @@ function detect(S,K){
   }
   mask=erode(dilate(mask,w,h),w,h);
   mask=erode(dilate(mask,w,h),w,h);
-  drawMask(mask,w,h);
+  if(withMask)drawMask(mask,w,h);
   let boxes=[];
   for(const c of label(mask,w,h).values())
     if(c.n>=S.amin)boxes.push({x0:c.x0,y0:c.y0,x1:c.x1,y1:c.y1,n:c.n});
@@ -225,6 +228,223 @@ function detect(S,K){
     if(b.n>2.4*A0&&kArea<3)kArea=3;
     const pk=peaksInBox(mask,w,h,b,3);
     const k=Math.min(3,Math.max(kArea,pk.length));
+    if(k===1){dets.push({x:(b.x0+bw/2)*K,y:(b.y0+bh/2)*K,s:bh*K,n:b.n});continue;}
+    merges++;
+    for(let q=0;q<k;q++){
+      if(q<pk.length)dets.push({x:pk[q].x*K,y:(pk[q].y+0.55*ch)*K,s:ch*K,n:b.n/k});
+      else dets.push({x:(b.x0+bw*(q+.5)/k)*K,y:(b.y0+bh/2)*K,s:bh*K,n:b.n/k});
+    }
+  }
+  dets=dets.filter(dd=>isFinite(dd.x)&&isFinite(dd.y)&&isFinite(dd.s)&&dd.s>0&&dd.y>0);
+  dets.sort((a,b)=>b.n-a.n);
+  return{dets:dets.slice(0,NB_ROIS).sort((a,b)=>a.x-b.x),merges};
+}
+
+/* ---- 🍎 détection pomme rouge ---- */
+function detectApple(img,K){
+  const d=img.data,w=img.width,h=img.height;
+  const mask=new Uint8Array(w*h);
+  for(let i=0;i<w*h;i++){
+    const r=d[i*4]/255,g=d[i*4+1]/255,b=d[i*4+2]/255;
+    const mx=Math.max(r,g,b),mn=Math.min(r,g,b),df=mx-mn;let hh=0;
+    if(df>0){if(mx===r)hh=((g-b)/df)%6;else if(mx===g)hh=(b-r)/df+2;else hh=(r-g)/df+4;hh*=60;if(hh<0)hh+=360;}
+    const s=mx>0?df/mx:0;
+    if((hh<=24||hh>=336)&&s>=0.55&&mx>=0.35)mask[i]=1;
+  }
+  mask=erode(dilate(mask,w,h),w,h);
+  let bestC=null;
+  for(const c of label(mask,w,h).values()){
+    if(c.n<40)continue;
+    const bw=c.x1-c.x0+1,bh=c.y1-c.y0+1,r=bw/bh;
+    if(r<0.55||r>1.8)continue;
+    if(!bestC||c.n>bestC.n)bestC=c;
+  }
+  if(!bestC)return null;
+  const bw=bestC.x1-bestC.x0+1,bh=bestC.y1-bestC.y0+1;
+  return{x:(bestC.x0+bw/2)*K,y:(bestC.y0+bh/2)*K,s:bh*K};
+}
+
+/* ---- tracker v14 : rang figé + gates plausibles ---- */
+class Tracker{
+  constructor(fps){this.fps=fps;this.dt=1/fps;this.tracks=new Map();this.nid=0;this.frame=0;
+    this.mergeFrames=[];this.closeFrames=[];this.swaps=0;this.rankAssigns=0;this.proxAssigns=0;}
+  spawn(d,rank){const id=this.nid++;
+    this.tracks.set(id,{id,x:d.x,y:d.y,s:d.s,vx:0,vy:0,lost:0,rank,
+      first:this.frame,last:this.frame,occ:[],bands:[0,0,0,0,0],vmax:0,vsum:0,vn:0,sMin:d.s,sMax:d.s});}
+  plausible(t,d){return d.s>0.6*t.s&&d.s<1.6*t.s&&d.y>0.10*meta.h&&d.y<0.85*meta.h;}
+  update(dets,merges){
+    this.frame++; if(merges)this.mergeFrames.push(this.frame);
+    const dt=this.dt;
+    for(const t of this.tracks.values()){t.px=t.x+t.vx*dt;t.py=t.y+t.vy*dt;}
+    const tr=[...this.tracks.values()];
+    for(let i=0;i<tr.length;i++)for(let j=i+1;j<tr.length;j++){
+      let L=tr[i],R2=tr[j]; if(L.rank>R2.rank){const t=L;L=R2;R2=t;}
+      const dx=L.px-R2.px;
+      if(dx>15&&dx<90&&L.vx>0&&R2.vx<0){const r=L.rank;L.rank=R2.rank;R2.rank=r;this.swaps++;}
+    }
+    const done=new Set(), uD=new Set();
+    const apply=(t,d)=>{
+      const k=Math.max(1,this.frame-t.last);
+      t.vx=clamp(.35*t.vx+.65*(d.x-t.x)/(k*dt));
+      t.vy=clamp(.35*t.vy+.65*(d.y-t.y)/(k*dt));
+      t.x=d.x;t.y=d.y;t.s=d.s;t.sMin=Math.min(t.sMin,d.s);t.sMax=Math.max(t.sMax,d.s);
+      t.last=this.frame;t.lost=0;done.add(t);};
+    if(dets.length===NB_ROIS){
+      this.rankAssigns++;
+      for(const t of this.tracks.values()){
+        const d=dets[t.rank];
+        if(!d||!this.plausible(t,d))continue;
+        const sp=Math.hypot(t.vx,t.vy);
+        const gate=t.lost>3?Math.max(80,1.3*sp*dt+10):Math.max(45,1.3*sp*dt+10);
+        if(Math.hypot(t.px-d.x,t.py-d.y)<gate){apply(t,d);uD.add(d);}
+      }
+    }else{
+      this.proxAssigns++;
+      const pairs=[];
+      for(const t of this.tracks.values())dets.forEach(d=>{
+        pairs.push([Math.hypot(t.px-d.x,t.py-d.y)+1.0*Math.abs(t.s-d.s),t,d]);});
+      pairs.sort((p,q)=>p[0]-q[0]);
+      for(const[c,t,d]of pairs){
+        if(done.has(t)||uD.has(d)||!this.plausible(t,d))continue;
+        const sp=Math.hypot(t.vx,t.vy), gate=t.lost>3?80:45;
+        if(c<Math.max(gate,1.3*sp*dt+8)){apply(t,d);uD.add(d);}
+      }
+    }
+    for(const t of this.tracks.values())
+      if(!done.has(t)){t.lost++;t.occ.push(this.frame);}
+    if(dets.length===NB_ROIS)
+      for(const r of SEL)
+        if(![...this.tracks.values()].some(t=>t.rank===r))this.spawn(dets[r],r);
+    const best=new Map();
+    for(const t of [...this.tracks.values()]){
+      const o=best.get(t.rank);
+      if(!o)best.set(t.rank,t);
+      else{const bad=(t.lost>o.lost||(t.lost===o.lost&&t.last<o.last))?t:o;this.tracks.delete(bad.id);}
+    }
+    for(const t of this.tracks.values()){
+      if(t.lost)continue;
+      const sp=Math.hypot(t.vx,t.vy);
+      t.vmax=Math.max(t.vmax,sp);t.vsum+=sp;t.vn++;
+      t.bands[sp<100?0:sp<500?1:sp<700?2:sp<=1500?3:4]++;
+    }
+    const act=[...this.tracks.values()].filter(t=>!t.lost);
+    outer:for(let i=0;i<act.length;i++)for(let j=i+1;j<act.length;j++)
+      if(Math.hypot(act[i].x-act[j].x,act[i].y-act[j].y)<1.1*(act[i].s+act[j].s)){this.closeFrames.push(this.frame);break outer;}
+  }
+}
+const ranges=fr=>{const o=[];let s=null,p=null;
+  for(const f of fr){if(s===null){s=p=f;}else if(f===p+1)p=f;else{o.push(s===p?""+s:s+"-"+p);s=p=f;}}
+  if(s!==null)o.push(s===p?""+s:s+"-"+p);return o.join(", ");};
+
+/* ---- 🤖 réglage autonome ---- */
+$("#btnAuto").onclick=async()=>{
+  if(running)return; running=true; $("#btnRun").disabled=true; $("#btnAuto").disabled=true;
+  $("#prog").style.display="block";
+  const fps=+$("#fps").value||30, K=meta.w/can.width;
+  const total=Math.floor(meta.dur*fps);
+  const step=Math.max(1,Math.floor(total/20));
+  const samples=[];
+  for(let i=0;i<=total;i+=step){
+    await seek(Math.min(i/fps,meta.dur-.001));
+    ctx.drawImage(vid,0,0,can.width,can.height);
+    samples.push(ctx.getImageData(0,0,can.width,can.height));
+    $("#prog>div").style.width=(50*i/total)+"%";
+    await new Promise(r=>setTimeout(r,0));
+  }
+  const grid=[];
+  for(const s of[0.45,0.55,0.65])for(const v of[0.5,0.6])for(const a of[80,150])
+    grid.push({h0:20,h1:75,smin:s,vmin:v,amin:a});
+  let best=null;
+  for(let gi=0;gi<grid.length;gi++){
+    let score=0;
+    for(const im of samples){
+      const n=detectFrom(im,grid[gi],K,false).dets.length;
+      score+= n===3?1: n===2?0.5: n===1?0.15:0;
+    }
+    $("#autoStatus").textContent="🤖 Essai "+(gi+1)+"/"+grid.length+" …";
+    $("#prog>div").style.width=(50+50*gi/grid.length)+"%";
+    if(gi%3===0)await new Promise(r=>setTimeout(r,0));
+    if(!best||score>best.score)best={score,cfg:grid[gi]};
+  }
+  $("#smin").value=best.cfg.smin; $("#vmin").value=best.cfg.vmin; $("#amin").value=best.cfg.amin;
+  R_AUTO={n:grid.length,score:(best.score/samples.length).toFixed(2),cfg:best.cfg};
+  $("#autoStatus").textContent="🤖 Meilleure config: S>"+best.cfg.smin+" V>"+best.cfg.vmin+" aire>"+best.cfg.amin+" (score "+R_AUTO.score+") → analyse complète lancée";
+  running=false;
+  await $("#btnRun").onclick();
+  $("#btnAuto").disabled=false;
+};
+
+$("#btnRun").onclick=async()=>{
+  if(running)return; running=true; $("#btnRun").disabled=true; $("#prog").style.display="block";
+  A0=1200; ERRS.length=0;
+  const fps=+$("#fps").value||30;
+  const S={h0:+$("#h0").value,h1:+$("#h1").value,smin:+$("#smin").value,vmin:+$("#vmin").value,amin:+$("#amin").value};
+  const K=meta.w/can.width;
+  R={fps,K,S,frames:0,counts:{},bad:[],errs:0,errMsg:"",frameDets:[],
+     apple:{x:0,y:0,first:-1,last:-1,miss:0},
+     tr:new Tracker(fps),sel:[...SEL].sort()};
+  vid.pause();
+  const total=Math.floor(meta.dur*fps);
+  for(let i=0;i<=total;i++){
+    try{
+      await seek(Math.min(i/fps,meta.dur-.001));
+      ctx.drawImage(vid,0,0,can.width,can.height);
+      const imgData=ctx.getImageData(0,0,can.width,can.height);
+      const{dets,merges}=detectFrom(imgData,S,K,true);
+      const ap=detectApple(imgData,K);
+      R.counts[dets.length]=(R.counts[dets.length]||0)+1;
+      R.frameDets.push(dets.map(d=>({x:d.x,y:d.y})));
+      const A=R.apple;
+      if(ap&&(A.last<0||Math.hypot(ap.x-A.x,ap.y-A.y)<150)){
+        A.x=ap.x;A.y=ap.y;A.last=R.frames; if(A.first<0)A.first=R.frames; A.miss=0;
+      }else if(!ap)A.miss++;
+      R.tr.update(dets,merges); R.frames++;
+      if(dets.length!==NB_ROIS&&R.bad.length<6)R.bad.push({f:i,v:can.toDataURL(),m:mcan.toDataURL()});
+      if($("#child").checked){
+        for(const t of R.tr.tracks.values()){
+          const bx=t.lost?t.px:t.x, by=t.lost?t.py:t.y;
+          if(!isFinite(bx)||!isFinite(by)||!isFinite(t.s))continue;
+          const r=t.rank, cx=bx/K, cy=(by+1.7*t.s)/K;
+          const rad=1.9*t.s/K*(1+0.06*Math.sin(R.tr.frame*0.35));
+          ctx.save();
+          if(t.lost>0){ctx.globalAlpha=.45;ctx.setLineDash([10,8]);}
+          ctx.strokeStyle=COLORS[r];ctx.lineWidth=5;
+          ctx.beginPath();ctx.arc(cx,cy,rad,0,7);ctx.stroke();
+          ctx.restore();
+          ctx.globalAlpha=t.lost>0?.5:1;
+          ctx.font=Math.round(.9*t.s/K)+"px serif";
+          ctx.fillText(EMO[r],cx-rad/2,(by-0.7*t.s)/K);
+          ctx.globalAlpha=1;ctx.font="12px monospace";
+        }
+        if(A.last>=0&&R.frames-1-A.last<=3){
+          ctx.strokeStyle="#ff4081";ctx.lineWidth=4;
+          ctx.beginPath();ctx.arc(A.x/K,A.y/K,1.4*A.s/K,0,7);ctx.stroke();
+          ctx.font=Math.round(.8*A.s/K)+"px serif";
+          ctx.fillText("🍎",A.x/K-.4*A.s/K,A.y/K-1.5*A.s/K);
+          ctx.font="12px monospace";
+        }
+      }else{
+        for(const t of R.tr.tracks.values()){
+          if(!isFinite(t.x)||!isFinite(t.y))continue;
+          ctx.fillStyle=t.lost?"#f66":"#4f8";
+          ctx.beginPath();ctx.arc(t.x/K,t.y/K,4,0,7);ctx.fill();
+          ctx.fillText("#"+t.id+"r"+t.rank,t.x/K+6,t.y/K-6);
+        }
+        ctx.strokeStyle="#ff0";ctx.lineWidth=1.5;
+        for(const d of dets){
+          ctx.beginPath();
+          ctx.moveTo(d.x/K-4,d.y/K-4);ctx.lineTo(d.x/K+4,d.y/K+4);
+          ctx.moveTo(d.x/K+4,d.y/K-4);ctx.lineTo(d.x/K-4,d.y/K+4);
+          ctx.stroke();
+        }
+        if(ap){ctx.strokeStyle="#ff4081";ctx.beginPath();ctx.arc(ap.x/K,ap.y/K,6,0,7);ctx.stroke();}
+      }
+    }catch(err){R.errs++;R.errMsg=String(err);}
+    $("#prog>div").style.width=(100*i/total)+"%";
+    if(i%10===0)await new Promise(r=>setTimeout(r,0));
+  }
+  try{
+    coath.max(kArea,pk.length));
     if(k===1){dets.push({x:(b.x0+bw/2)*K,y:(b.y0+bh/2)*K,s:bh*K,n:b.n});continue;}
     merges++;
     for(let q=0;q<k;q++){
