@@ -124,3 +124,58 @@ let ranges=fr=>{let o=[];let s=null,p=null;
   for(let f of fr){if(s===null){s=p=f;}else if(f===p+1)p=f;else{o.push(s===p?""+s:s+"-"+p);s=p=f;}}
   if(s!==null)o.push(s===p?""+s:s+"-"+p);return o.join(", ");};
 // === FIN MORCEAU 2 ===
+function drawMarkers(K,frameIdx,ov){
+  let child=$("#child").checked;
+  if(child){
+    for(let e of ov.ranks){
+      let r=e.r, bx,by,bs,lost=e.lost;
+      if(ov.dets.length===NB_ROIS&&ov.dets[r]){bx=ov.dets[r][0];by=ov.dets[r][1];bs=ov.dets[r][2];}
+      else{bx=e.x;by=e.y;bs=e.s;}
+      if(!isFinite(bx)||!isFinite(by)||!isFinite(bs))continue;
+      let cx=bx/K, cy=(by+1.7*bs)/K;
+      let rad=1.9*bs/K*(1+0.06*Math.sin(frameIdx*0.35));
+      ctx.save();
+      if(lost){ctx.globalAlpha=.45;ctx.setLineDash([10,8]);}
+      ctx.strokeStyle=COLORS[r];ctx.lineWidth=5;
+      ctx.beginPath();ctx.arc(cx,cy,rad,0,7);ctx.stroke();
+      ctx.restore();
+      if(R&&R.carrierRank===r&&frameIdx>=R.carrierFrame){
+        ctx.strokeStyle="#ff1747";ctx.lineWidth=4;
+        ctx.beginPath();ctx.arc(cx,cy,rad+7,0,7);ctx.stroke();
+        ctx.fillStyle="#ff1747";ctx.font="bold 10px monospace";
+        ctx.fillText("PORTEUR",cx-24,cy+rad+16);
+      }
+      ctx.globalAlpha=lost?.5:1;
+      ctx.font=Math.round(.9*bs/K)+"px serif";
+      ctx.fillText(EMO[r],cx-rad/2,(by-0.7*bs)/K);
+      ctx.font="bold "+Math.round(.55*bs/K)+"px monospace";
+      ctx.strokeStyle="#000";ctx.lineWidth=3;
+      ctx.strokeText(LETTERS[r],cx+rad*.72,cy-rad*.72);
+      ctx.fillStyle=COLORS[r];
+      ctx.fillText(LETTERS[r],cx+rad*.72,cy-rad*.72);
+      ctx.globalAlpha=1;ctx.font="12px monospace";
+    }
+    if(ov.apple){
+      ctx.strokeStyle="#ff4081";ctx.lineWidth=4;
+      ctx.beginPath();ctx.arc(ov.apple[0]/K,ov.apple[1]/K,1.4*ov.apple[2]/K,0,7);ctx.stroke();
+      ctx.font=Math.round(.8*ov.apple[2]/K)+"px serif";
+      ctx.fillText("🍎",ov.apple[0]/K-.4*ov.apple[2]/K,ov.apple[1]/K-1.5*ov.apple[2]/K);
+      ctx.font="12px monospace";
+    }
+  }else{
+    for(let e of ov.ranks){
+      ctx.fillStyle=e.lost?"#f66":"#4f8";
+      ctx.beginPath();ctx.arc(e.x/K,e.y/K,4,0,7);ctx.fill();
+      ctx.fillText(LETTERS[e.r],e.x/K+6,e.y/K-6);
+    }
+    ctx.strokeStyle="#ff0";ctx.lineWidth=1.5;
+    for(let d of ov.dets){
+      ctx.beginPath();
+      ctx.moveTo(d[0]/K-4,d[1]/K-4);ctx.lineTo(d[0]/K+4,d[1]/K+4);
+      ctx.moveTo(d[0]/K+4,d[1]/K-4);ctx.lineTo(d[0]/K-4,d[1]/K+4);
+      ctx.stroke();
+    }
+  }
+}
+let bk2=$("#jsok");
+if(bk2){bk2.textContent="🟡 core+ui1 OK — ui2.js manquant/tronqué";bk2.style.color="#ffee58";}
