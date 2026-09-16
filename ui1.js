@@ -127,42 +127,75 @@ let ranges=fr=>{let o=[];let s=null,p=null;
 function drawMarkers(K,frameIdx,ov){
   let child=$("#child").checked;
   if(child){
+    // Calcul des distances entre rois pour détecter fusions visuelles
+    let positions=ov.ranks.map(e=>{
+      if(ov.dets.length===NB_ROIS&&ov.dets[e.r])return{x:ov.dets[e.r][0],y:ov.dets[e.r][1],s:ov.dets[e.r][2]};
+      return{x:e.x,y:e.y,s:e.s};
+    });
+    let minDist=1e9;
+    for(let i=0;i<positions.length;i++)for(let j=i+1;j<positions.length;j++){
+      let d=Math.hypot(positions[i].x-positions[j].x,positions[i].y-positions[j].y);
+      if(d<minDist)minDist=d;
+    }
+    let fusionMode=minDist<100; // rois proches → mode compact
+    
     for(let e of ov.ranks){
       let r=e.r, bx,by,bs,lost=e.lost;
       if(ov.dets.length===NB_ROIS&&ov.dets[r]){bx=ov.dets[r][0];by=ov.dets[r][1];bs=ov.dets[r][2];}
       else{bx=e.x;by=e.y;bs=e.s;}
       if(!isFinite(bx)||!isFinite(by)||!isFinite(bs))continue;
-      let cx=bx/K, cy=(by+1.7*bs)/K;
-      let rad=1.9*bs/K*(1+0.06*Math.sin(frameIdx*0.35));
+      
+      // Ancrage à la BASE de la couronne (pas le centre)
+      let cx=bx/K, cy=(by+0.9*bs)/K;
+      
+      // Rayon réduit en mode fusion
+      let radFactor=fusionMode?1.0:1.4;
+      let rad=radFactor*bs/K*(1+0.06*Math.sin(frameIdx*0.35));
+      
       ctx.save();
       if(lost){ctx.globalAlpha=.45;ctx.setLineDash([10,8]);}
-      ctx.strokeStyle=COLORS[r];ctx.lineWidth=5;
+      ctx.strokeStyle=COLORS[r];ctx.lineWidth=fusionMode?3:5;
       ctx.beginPath();ctx.arc(cx,cy,rad,0,7);ctx.stroke();
       ctx.restore();
+      
+      // Double anneau rouge PORTEUR
       if(R&&R.carrierRank===r&&frameIdx>=R.carrierFrame){
-        ctx.strokeStyle="#ff1747";ctx.lineWidth=4;
-        ctx.beginPath();ctx.arc(cx,cy,rad+7,0,7);ctx.stroke();
-        ctx.fillStyle="#ff1747";ctx.font="bold 10px monospace";
-        ctx.fillText("PORTEUR",cx-24,cy+rad+16);
+        ctx.strokeStyle="#ff1747";ctx.lineWidth=3;
+        ctx.beginPath();ctx.arc(cx,cy,rad+5,0,7);ctx.stroke();
+        ctx.fillStyle="#ff1747";ctx.font="bold 9px monospace";
+        ctx.fillText("PORTEUR",cx-20,cy+rad+12);
       }
+      
+      // Lettre décalée radialement (éviter superposition)
       ctx.globalAlpha=lost?.5:1;
-      ctx.font=Math.round(.9*bs/K)+"px serif";
-      ctx.fillText(EMO[r],cx-rad/2,(by-0.7*bs)/K);
-      ctx.font="bold "+Math.round(.55*bs/K)+"px monospace";
+      let angle=(r===0)?-Math.PI/3:(r===1)?-Math.PI/2:-2*Math.PI/3;
+      let labelDist=fusionMode?rad*1.3:rad*1.5;
+      let lx=cx+labelDist*Math.cos(angle);
+      let ly=cy+labelDist*Math.sin(angle);
+      
+      ctx.font="bold "+Math.round(.45*bs/K)+"px monospace";
       ctx.strokeStyle="#000";ctx.lineWidth=3;
-      ctx.strokeText(LETTERS[r],cx+rad*.72,cy-rad*.72);
+      ctx.strokeText(LETTERS[r],lx,ly);
       ctx.fillStyle=COLORS[r];
-      ctx.fillText(LETTERS[r],cx+rad*.72,cy-rad*.72);
+      ctx.fillText(LETTERS[r],lx,ly);
+      
+      // Emoji au-dessus (plus petit en fusion)
+      let emoSize=fusionMode?.6:.8;
+      ctx.font=Math.round(emoSize*bs/K)+"px serif";
+      ctx.fillText(EMO[r],cx-rad*.4,cy-rad*1.2);
       ctx.globalAlpha=1;ctx.font="12px monospace";
     }
+    
+    // Boule rouge
     if(ov.apple){
-      ctx.strokeStyle="#ff4081";ctx.lineWidth=4;
-      ctx.beginPath();ctx.arc(ov.apple[0]/K,ov.apple[1]/K,1.4*ov.apple[2]/K,0,7);ctx.stroke();
-      ctx.font=Math.round(.8*ov.apple[2]/K)+"px serif";
-      ctx.fillText("🍎",ov.apple[0]/K-.4*ov.apple[2]/K,ov.apple[1]/K-1.5*ov.apple[2]/K);
+      ctx.strokeStyle="#ff4081";ctx.lineWidth=3;
+      ctx.beginPath();ctx.arc(ov.apple[0]/K,ov.apple[1]/K,1.2*ov.apple[2]/K,0,7);ctx.stroke();
+      ctx.font=Math.round(.7*ov.apple[2]/K)+"px serif";
+      ctx.fillText("🍎",ov.apple[0]/K-.35*ov.apple[2]/K,ov.apple[1]/K-1.3*ov.apple[2]/K);
       ctx.font="12px monospace";
     }
   }else{
+    // Mode debug inchangé
     for(let e of ov.ranks){
       ctx.fillStyle=e.lost?"#f66":"#4f8";
       ctx.beginPath();ctx.arc(e.x/K,e.y/K,4,0,7);ctx.fill();
@@ -174,8 +207,7 @@ function drawMarkers(K,frameIdx,ov){
       ctx.moveTo(d[0]/K-4,d[1]/K-4);ctx.lineTo(d[0]/K+4,d[1]/K+4);
       ctx.moveTo(d[0]/K+4,d[1]/K-4);ctx.lineTo(d[0]/K-4,d[1]/K+4);
       ctx.stroke();
-    }
+    }let bk2=$("#jsok");
+if(bk2){bk2.textContent="🟡 core+ui1 OK — ui2.js manquant/tronqué";bk2.style.color="#ffee58";}
   }
 }
-let bk2=$("#jsok");
-if(bk2){bk2.textContent="🟡 core+ui1 OK — ui2.js manquant/tronqué";bk2.style.color="#ffee58";}
