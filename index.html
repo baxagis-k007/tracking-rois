@@ -4,10 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kings Tracker v22 — Tracking physique du porteur</title>
-<script src="core.js"></script>
-<script src="ui1.js"></script>
-<script src="ui2.js"></script>
-<script src="track22.js"></script>
+<style>
   :root{--bg:#14161a;--pan:#1e2228;--acc:#f5c542;--txt:#e8e8e8}
   *{box-sizing:border-box}body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--txt);padding:20px}
   h1{font-size:20px}.muted{color:#9aa3ad;font-size:13px}
@@ -32,7 +29,7 @@
 </head>
 <body>
 <h1>👑 Kings Tracker v22 — Tracking physique du porteur</h1>
-<p id="jsok" style="color:#ff8a80;font-weight:700">⚠️ JS non chargé — core.js ou ui.js manquant/tronqué</p>
+<p id="jsok" style="color:#ff8a80;font-weight:700">⚠️ JS non chargé — core/ui1/ui2/track22 manquant ou tronqué</p>
 <p class="muted">100 % local. 🤖 réglage auto · ⬇️ export vidéo · 🍎 détection du porteur.</p>
 
 <div class="panel">
@@ -66,7 +63,7 @@
   <div id="prog"><div></div></div>
 </div>
 
-<div class="panel"><canvas id="view"></canvas><p class="muted">Vue tracking : anneau couleur + lettre = roi suivi · double anneau rouge = PORTEUR · pointillé = caché</p><canvas id="mask"></canvas><p class="muted">Masque couronnes (debug)</p></div>
+<div class="panel"><canvas id="view"></canvas><p class="muted">Vue tracking : ellipse couleur + badge lettre = roi physique · rouge = PORTEUR · gris « ? » = identité incertaine · pointillé = caché</p><canvas id="mask"></canvas><p class="muted">Masque couronnes (debug)</p></div>
 
 <div class="panel" id="galWrap" style="display:none"><b>Frames problématiques (vue | masque)</b><div id="gal" class="row"></div></div>
 
@@ -84,11 +81,8 @@
 </div>
 
 <script src="core.js"></script>
-   <script src="ui1.js"></script>
-   <script src="ui2.js"></script>
-<script src="fix.js"></script>
-<script src="ident.js"></script>
-<script src="fix2.js"></script>
-<script src="fix3.js"></script>
+<script src="ui1.js"></script>
+<script src="ui2.js"></script>
+<script src="track22.js"></script>
 </body>
 </html>
