@@ -140,3 +140,77 @@ drawMarkers=function(K,frameIdx,ov){
   }
 };
 // === FIN MORCEAU 2 ===
+let _rep22=buildReport;
+buildReport=function(){
+  if(R&&R.framesData&&R.framesData.length){
+    let n=R.framesData.length;
+    let vis=i=>{let ov=R.framesData[i]&&R.framesData[i].ov;return ov&&ov.apple?ov.apple:null;};
+    let disp=-1,reap=-1;
+    for(let i=0;i<n-8;i++){
+      if(vis(i)){
+        let gap=true;
+        for(let j=i+1;j<=Math.min(n-1,i+8);j++)if(vis(j)){gap=false;break;}
+        if(gap){disp=i;break;}
+      }
+    }
+    if(disp>=0)for(let j=disp+9;j<n;j++)if(vis(j)){reap=j;break;}
+    let nearAt=i=>{
+      let ov=R.framesData[i].ov,a=vis(i);
+      if(!ov||!a)return -1;
+      let bi=-1,bd=1e9;
+      for(let e of (ov.ranks||[])){let dd=Math.hypot(e.x-a[0],e.y-a[1]);if(dd<bd){bd=dd;bi=e.r;}}
+      return bi;
+    };
+    if(disp>=0){
+      let car=nearAt(disp);
+      if(car>=0){R.carrierRank=car;R.carrierFrame=disp;}
+      let ov=R.framesData[disp].ov,a=vis(disp);
+      let dists=(ov.ranks||[]).map(e=>LETTERS[e.r]+":"+Math.round(Math.hypot(e.x-a[0],e.y-a[1]))).join(" ");
+      let repTxt="boule non réapparue après f"+disp;
+      let coherent="—";
+      if(reap>=0){
+        let rr=nearAt(reap);
+        repTxt="boule réapparue à f"+reap+" sous "+(rr>=0?LETTERS[rr]:"?");
+        coherent=(rr===car)?"COHÉRENT":"INCOHÉRENT";
+      }
+      let conf=0;
+      if(car>=0){
+        let N=n-1-disp,v=0,u=0;
+        for(let i=disp;i<n;i++){
+          let e2=(R.framesData[i].ov.ranks||[]).find(q=>q.r===car);
+          if(e2&&!e2.lost)v++;
+          if(e2&&e2.uncert)u++;
+        }
+        conf=Math.max(0,Math.min(100,Math.round(100*(v/Math.max(1,N))*(1-u/Math.max(1,N)))));
+      }
+      R._valid={disp,reap,car,dists,repTxt,coherent,conf};
+    }
+  }
+  _rep22();
+  if(R&&R._valid){
+    let V=R._valid;
+    let L=["","--- VALIDATION CROISÉE 🍎 ---",
+      "distances boule↔rois à f"+V.disp+" : "+V.dists,
+      "porteur verrouillé : "+(V.car>=0?LETTERS[V.car]:"?")+" à f"+V.disp,
+      V.repTxt,
+      "conclusion : "+V.coherent,
+      "confiance porteur : "+V.conf+" %",
+      "","--- CONFIANCE / INCERTITUDE PAR PISTE ---"];
+    for(let r of [0,1,2]){
+      let v=0,u=0,tt=0;
+      for(let fd of R.framesData){
+        let e=(fd.ov.ranks||[]).find(q=>q.r===r);
+        if(!e)continue;
+        tt++;if(!e.lost)v++;if(e.uncert)u++;
+      }
+      L.push("roi "+LETTERS[r]+" : visible "+Math.round(100*v/Math.max(1,tt))+"% | incertain "+Math.round(100*u/Math.max(1,tt))+"% des frames");
+    }
+    $("#pre").textContent+="\n"+L.join("\n");
+  }
+};
+let loadMap22="core:"+(typeof detectFrom==="function"?"ok":"KO")
+ +" ui1:"+(typeof Tracker==="function"?"ok":"KO")
+ +" ui2:"+(typeof buildReport==="function"?"ok":"KO");
+let bk10=$("#jsok");
+if(bk10){bk10.textContent="✅ v22 | "+loadMap22;bk10.style.color="#69f0ae";}
+// === FIN MORCEAU 3 ===
